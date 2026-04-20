@@ -366,29 +366,90 @@ void Simulation::minimize(bool reconnect) {
   timer.Stop("minimization");
 }
 
+//change sylvain
+alglib::real_1d_array Simulation::buildLBFGSScale() const {
+  const int nrFreeNodes = mesh.freeNodeIds.size();
+  alglib::real_1d_array s;
+  s.setlength(2 * nrFreeNodes);
+
+  // First test: neutral scaling
+  // Later you can replace 1.0 by a characteristic displacement scale.
+  for (int i = 0; i < 2 * nrFreeNodes; ++i) {
+    s[i] = 1.0;
+  }
+
+  return s;
+}
+//change sylvain
+
+//change sylvain
+// void Simulation::m_minimizeWithLBFGS() {
+//   timer.Start("LBFGSMinimization");
+//   // https://www.alglib.net/translator/man/manual.cpp.html#sub_minlbfgsrestartfrom
+//   // We reset and reuse the state instead of initializing it again
+//   // (The hessian is reset and not preserved)
+//   alglib::minlbfgsrestartfrom(LBFGS_state, alglibNodeDisplacements);
+//
+//   // Set termination condition, ei. when is the solution good enough
+//   // https://www.alglib.net/translator/man/manual.cpp.html#sub_minlbfgssetcond
+//   alglib::minlbfgssetcond(LBFGS_state, config.LBFGSEpsg, config.LBFGSEpsf,
+//                           config.LBFGSEpsx, config.LBFGSMaxIterations);
+//
+//   // Connect the chosen state to the minimization state
+//   minState = MinState(LBFGS_state);
+//
+//   //  This is where the heavy calculations happen
+//   alglib::minlbfgsoptimize(LBFGS_state, alglibEnergyAndGradient,
+//                            iterationLogger, &dataLink);
+//
+//   alglib::minlbfgsresults(LBFGS_state, alglibNodeDisplacements, LBFGS_report);
+//   LBFGSRep.nms = timer.Stop("LBFGSMinimization");
+//   LBFGSRep = SimReport(LBFGS_report);
+// }
+
+
 void Simulation::m_minimizeWithLBFGS() {
   timer.Start("LBFGSMinimization");
-  // https://www.alglib.net/translator/man/manual.cpp.html#sub_minlbfgsrestartfrom
-  // We reset and reuse the state instead of initializing it again
-  // (The hessian is reset and not preserved)
+
+  // Reuse optimizer state but restart from current point.
   alglib::minlbfgsrestartfrom(LBFGS_state, alglibNodeDisplacements);
 
-  // Set termination condition, ei. when is the solution good enough
-  // https://www.alglib.net/translator/man/manual.cpp.html#sub_minlbfgssetcond
-  alglib::minlbfgssetcond(LBFGS_state, config.LBFGSEpsg, config.LBFGSEpsf,
-                          config.LBFGSEpsx, config.LBFGSMaxIterations);
+  // --- Change 1: variable scaling ---
+  alglib::real_1d_array lbfgsScale = buildLBFGSScale();
+  alglib::minlbfgssetscale(LBFGS_state, lbfgsScale);
+
+  // --- Change 2: diagonal scale-based preconditioning ---
+  // This uses the scale vector above as a diagonal preconditioner.
+  alglib::minlbfgssetprecscale(LBFGS_state);
+
+  // Stopping conditions
+  alglib::minlbfgssetcond(
+      LBFGS_state,
+      config.LBFGSEpsg,
+      config.LBFGSEpsf,
+      config.LBFGSEpsx,
+      config.LBFGSMaxIterations
+  );
 
   // Connect the chosen state to the minimization state
   minState = MinState(LBFGS_state);
 
-  //  This is where the heavy calculations happen
-  alglib::minlbfgsoptimize(LBFGS_state, alglibEnergyAndGradient,
-                           iterationLogger, &dataLink);
+  // Heavy calculations happen here
+  alglib::minlbfgsoptimize(
+      LBFGS_state,
+      alglibEnergyAndGradient,
+      iterationLogger,
+      &dataLink
+  );
 
   alglib::minlbfgsresults(LBFGS_state, alglibNodeDisplacements, LBFGS_report);
+
   LBFGSRep.nms = timer.Stop("LBFGSMinimization");
   LBFGSRep = SimReport(LBFGS_report);
 }
+//change sylvain
+
+
 
 void Simulation::m_minimizeWithCG() {
   timer.Start("CGMinimization");

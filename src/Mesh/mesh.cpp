@@ -567,58 +567,179 @@ will sometimes hang, with all threads waiting for each other. I have checked
 that all threads do actually reach the barrier, but the function never returns.
 Using a manual barrier, i can add a timeout. This seems to work.
 */
+
+//Change Sylvain
 void Mesh::updateElementsForces() {
-  omp_set_dynamic(0); // once per process is fine too
-  const int nNodes = nodes.size();
-  const int nThreads = omp_get_max_threads();
-  const size_t scratchSize = static_cast<size_t>(nThreads) * nNodes;
+    omp_set_dynamic(0);
 
-  if (forceScratch.size() != scratchSize || forceScratchThreads != nThreads) {
-    forceScratch.assign(scratchSize, Vector2d::Zero());
-    forceScratchThreads = nThreads;
-  } else {
-    std::fill(forceScratch.begin(), forceScratch.end(), Vector2d::Zero());
-  }
+    const int nNodes = nodes.size();
+    const int nThreads = omp_get_max_threads();
+    const size_t scratchSize = static_cast<size_t>(nThreads) * nNodes;
 
-  double energy_sum = 0.0;
-
-#pragma omp parallel
-  {
-    const int tid = omp_get_thread_num();
-    Vector2d *local = forceScratch.data() + static_cast<size_t>(tid) * nNodes;
-
-#pragma omp for schedule(static, 1024) reduction(+ : energy_sum) nowait
-    for (int i = 0; i < nrElements; ++i) {
-      TElement &e = elements[i];
-      e.updateForces(*this); // must not wait on other elements
-      energy_sum += e.energy;
-
-      const GhostNode &g0 = e.ghostNodes[0];
-      const GhostNode &g1 = e.ghostNodes[1];
-      const GhostNode &g2 = e.ghostNodes[2];
-      local[g0.referenceId.i] += g0.f;
-      local[g1.referenceId.i] += g1.f;
-      local[g2.referenceId.i] += g2.f;
+    if (forceScratch.size() != scratchSize || forceScratchThreads != nThreads) {
+        forceScratch.resize(scratchSize);
+        forceScratchThreads = nThreads;
     }
-  }
-  totalEnergy = energy_sum;
 
-  // Update forces on nodes by summing contributions from all elements in all
-  // threads and track max force over free nodes.
-  double maxForce = 0.0;
+    double energy_sum = 0.0;
+
+#pragma omp parallel reduction(+ : energy_sum)
+    {
+        const int tid = omp_get_thread_num();
+        Vector2d *local = forceScratch.data() + static_cast<size_t>(tid) * nNodes;
+
+        // Parallel first-touch / zeroing of this thread's stripe
+        for (int i = 0; i < nNodes; ++i) {
+            local[i].setZero();
+        }
+
+#pragma omp for schedule(static) nowait
+        for (int i = 0; i < nrElements; ++i) {
+            TElement &e = elements[i];
+            e.updateForces(*this);
+            energy_sum += e.energy;
+
+            const GhostNode &g0 = e.ghostNodes[0];
+            const GhostNode &g1 = e.ghostNodes[1];
+            const GhostNode &g2 = e.ghostNodes[2];
+
+            local[g0.referenceId.i] += g0.f;
+            local[g1.referenceId.i] += g1.f;
+            local[g2.referenceId.i] += g2.f;
+        }
+    }
+
+    totalEnergy = energy_sum;
+
+    double maxForce = 0.0;
 #pragma omp parallel for reduction(max : maxForce)
-  for (int i = 0; i < nNodes; ++i) {
-    Vector2d sum = Vector2d::Zero();
-    for (int t = 0; t < nThreads; ++t) {
-      sum += forceScratch[static_cast<size_t>(t) * nNodes + i];
+    for (int i = 0; i < nNodes; ++i) {
+        Vector2d sum = Vector2d::Zero();
+        for (int t = 0; t < nThreads; ++t) {
+            sum += forceScratch[static_cast<size_t>(t) * nNodes + i];
+        }
+        nodes(i).f = sum;
+        if (!nodes(i).fixedNode) {
+            maxForce = std::max({maxForce, std::abs(sum[0]), std::abs(sum[1])});
+        }
     }
-    nodes(i).f = sum;
-    if (!nodes(i).fixedNode) {
-      maxForce = std::max({maxForce, std::abs(sum[0]), std::abs(sum[1])});
-    }
-  }
-  this->maxForce = maxForce;
+
+    this->maxForce = maxForce;
 }
+
+// void Mesh::updateElementsForces() {
+//   omp_set_dynamic(0); // once per process is fine too
+//   const int nNodes = nodes.size();
+//   const int nThreads = omp_get_max_threads();
+//   const size_t scratchSize = static_cast<size_t>(nThreads) * nNodes;
+//
+//   if (forceScratch.size() != scratchSize || forceScratchThreads != nThreads) {
+//     forceScratch.assign(scratchSize, Vector2d::Zero());
+//     forceScratchThreads = nThreads;
+//   } else {
+//     std::fill(forceScratch.begin(), forceScratch.end(), Vector2d::Zero());
+//   }
+//
+//   double energy_sum = 0.0;
+//
+// #pragma omp parallel
+//   {
+//     const int tid = omp_get_thread_num();
+//     Vector2d *local = forceScratch.data() + static_cast<size_t>(tid) * nNodes;
+//
+// #pragma omp for schedule(static, 1024) reduction(+ : energy_sum) nowait
+//     for (int i = 0; i < nrElements; ++i) {
+//       TElement &e = elements[i];
+//       e.updateForces(*this); // must not wait on other elements
+//       energy_sum += e.energy;
+//
+//       const GhostNode &g0 = e.ghostNodes[0];
+//       const GhostNode &g1 = e.ghostNodes[1];
+//       const GhostNode &g2 = e.ghostNodes[2];
+//       local[g0.referenceId.i] += g0.f;
+//       local[g1.referenceId.i] += g1.f;
+//       local[g2.referenceId.i] += g2.f;
+//     }
+//   }
+//   totalEnergy = energy_sum;
+//
+//   // Update forces on nodes by summing contributions from all elements in all
+//   // threads and track max force over free nodes.
+//   double maxForce = 0.0;
+// #pragma omp parallel for reduction(max : maxForce)
+//   for (int i = 0; i < nNodes; ++i) {
+//     Vector2d sum = Vector2d::Zero();
+//     for (int t = 0; t < nThreads; ++t) {
+//       sum += forceScratch[static_cast<size_t>(t) * nNodes + i];
+//     }
+//     nodes(i).f = sum;
+//     if (!nodes(i).fixedNode) {
+//       maxForce = std::max({maxForce, std::abs(sum[0]), std::abs(sum[1])});
+//     }
+//   }
+//   this->maxForce = maxForce;
+// }
+//
+// void Mesh::updateElementsForces() {
+//     omp_set_dynamic(0);
+//
+//     const int nNodes = nodes.size();
+//     const int nThreads = omp_get_max_threads();
+//     const size_t scratchSize = static_cast<size_t>(nThreads) * nNodes;
+//
+//     if (forceScratch.size() != scratchSize || forceScratchThreads != nThreads) {
+//         forceScratch.resize(scratchSize);
+//         forceScratchThreads = nThreads;
+//     }
+//
+//     double energy_sum = 0.0;
+//
+// #pragma omp parallel reduction(+ : energy_sum)
+//     {
+//         const int tid = omp_get_thread_num();
+//         Vector2d *local = forceScratch.data() + static_cast<size_t>(tid) * nNodes;
+//
+//         // Parallel first-touch / zeroing of this thread's stripe
+//         for (int i = 0; i < nNodes; ++i) {
+//             local[i].setZero();
+//         }
+//
+// #pragma omp for schedule(static) nowait
+//         for (int i = 0; i < nrElements; ++i) {
+//             TElement &e = elements[i];
+//             e.updateForces(*this);
+//             energy_sum += e.energy;
+//
+//             const GhostNode &g0 = e.ghostNodes[0];
+//             const GhostNode &g1 = e.ghostNodes[1];
+//             const GhostNode &g2 = e.ghostNodes[2];
+//
+//             local[g0.referenceId.i] += g0.f;
+//             local[g1.referenceId.i] += g1.f;
+//             local[g2.referenceId.i] += g2.f;
+//         }
+//     }
+//
+//     totalEnergy = energy_sum;
+//
+//     double maxForce = 0.0;
+// #pragma omp parallel for reduction(max : maxForce)
+//     for (int i = 0; i < nNodes; ++i) {
+//         Vector2d sum = Vector2d::Zero();
+//         for (int t = 0; t < nThreads; ++t) {
+//             sum += forceScratch[static_cast<size_t>(t) * nNodes + i];
+//         }
+//         nodes(i).f = sum;
+//         if (!nodes(i).fixedNode) {
+//             maxForce = std::max({maxForce, std::abs(sum[0]), std::abs(sum[1])});
+//         }
+//     }
+//
+//     this->maxForce = maxForce;
+// }
+//Changes Sylvain
+
+
 
 void Mesh::updateElementsGeometry() {
 #pragma omp parallel for schedule(static, 1024)

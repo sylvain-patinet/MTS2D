@@ -76,6 +76,8 @@ struct DataLink {
   DataLink(Simulation *s);
 };
 
+
+
 // Container for previous load-step and minimization values.
 struct SimulationEnergyHistory {
   // Load-step energy tracking (explicit names to avoid ambiguity).
@@ -301,6 +303,9 @@ private:
 
   alglib::mincgstate CG_state;
   alglib::mincgreport CG_report;
+
+  //change sylvain
+  alglib::real_1d_array buildLBFGSScale() const;
 
   // FIRE parameters
   FIREpp::FIREParam<double> FIRE_param;
