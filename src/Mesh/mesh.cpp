@@ -567,7 +567,6 @@ will sometimes hang, with all threads waiting for each other. I have checked
 that all threads do actually reach the barrier, but the function never returns.
 Using a manual barrier, i can add a timeout. This seems to work.
 */
-
 //Change Sylvain
 void Mesh::updateElementsForces() {
     omp_set_dynamic(0);
